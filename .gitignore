@@ -1,0 +1,15 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# Environment variables and secrets (NEVER COMMIT)
+.env
+.env.*
+!.env.example
+
+# Local backups and build artifacts
+backup_original/
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db

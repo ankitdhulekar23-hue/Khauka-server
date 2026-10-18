@@ -1,12 +1,18 @@
 {
   "name": "khauka-server",
-  "version": "1.0.0",
-  "description": "WebSocket server for ESP32 and Gemini Live API",
+  "version": "2.0.0",
+  "description": "Production WebSocket Audio Bridge for KHAU KA! ESP32-S3 Hindi Voice Assistant and Google Gemini Live API",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node --test test/server.test.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   },
   "dependencies": {
-    "ws": "^8.16.0"
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "ws": "^8.18.0"
   }
 }
