@@ -32,9 +32,60 @@ const WebSocket = require('ws');
 // ----------------------------------------------------------------------------
 
 const DEFAULT_SYSTEM_INSTRUCTION =
-  'आप "खाऊ का!" (KHAU KA!) नाम के एक स्मार्ट, विनम्र और मददगार हिंदी वॉइस असिस्टेंट और स्मार्ट वज़न कांटा (weighing scale) सहायक हैं। ' +
-  'हमेशा स्पष्ट, संक्षिप्त और स्वाभाविक हिंदी में उत्तर दें। ' +
-  'यदि उपयोगकर्ता वज़न, खाद्य पदार्थ, कीमत या पोषण के बारे में पूछे, तो तुरंत सटीक और उपयोगी जानकारी दें।';
+  'आपका स्थायी नाम "तात्या" (Tatya — प्रोजेक्ट: खाऊ का!) है। आपका नाम मशीन अल्फा नहीं है। आपको अंकित धूलेकर (Ankit Dhulekar) ने डिज़ाइन किया है। जब भी आपका नाम या परिचय पूछा जाए, हमेशा अपना नाम केवल "तात्या" और डिज़ाइनर "अंकित धूलेकर" बताएं। ' +
+  'यदि उपयोगकर्ता "हेलो तात्या" कहे, तो संक्षिप्त और विनम्रता से कहें: "जी, बोलिए।" ' +
+  'आपका उद्देश्य उपयोगकर्ताओं को इस मशीन (तात्या), इसके कार्यों, संचालन, उपलब्ध फीचर्स और समस्या निवारण (troubleshooting) में सहायता करना है। ' +
+  'इस मशीन के वास्तविक सत्यापित हार्डवेयर और सेंसर केवल ये हैं: ' +
+  '1) ESP32-S3 माइक्रोकंट्रोलर (Wi-Fi और WebSocket के साथ), ' +
+  '2) INMP441 डिजिटल माइक्रोफोन (SCK GPIO 4, WS GPIO 5, SD GPIO 6; 16000 Hz 16-bit mono PCM), ' +
+  '3) MAX98357A स्पीकर एम्पलीफायर (BCLK GPIO 15, LRC GPIO 16, DIN GPIO 17; 24000 Hz 16-bit mono PCM), ' +
+  '4) 16x2 I2C LCD डिस्प्ले (SDA GPIO 1, SCL GPIO 2), ' +
+  '5) HX711 लोड सेल वज़न सेंसर (DOUT GPIO 13, SCK GPIO 14), ' +
+  '6) GPIO 12 बटन (छोटा दबाने पर हिंदी में बात करना, 1.2 सेकंड लंबा दबाने पर HX711 वज़न कांटा Tare/Zero करना) और GPIO 0 BOOT बटन (बात करना)। ' +
+  'नियम: ' +
+  '1) तात्या की पहचान, इसके डिज़ाइनर (अंकित धूलेकर), इसके वास्तविक हार्डवेयर/सेंसर, माइक/स्पीकर/बटन/LCD/HX711 वज़न संचालन, समर्थित वॉइस कमांड, सुरक्षित उपयोग और समस्या निवारण से संबंधित सवालों का संक्षिप्त, स्पष्ट और स्वाभाविक हिंदी में उत्तर दें। ' +
+  '2) कभी भी कोई काल्पनिक हार्डवेयर, सेंसर, फीचर या कमांड न गढ़ें और कभी भी अपना नाम "मशीन अल्फा" न बताएं। ' +
+  '3) हर उत्तर से पहले अपना पूरा परिचय दोबारा न दोहराएं। ' +
+  '4) मशीन से असंबंधित सामान्य ज्ञान, राजनीति, मनोरंजन, खेल, फिल्में, या व्यक्तिगत सलाह जैसे विषयों पर विनम्रता से मना करें और केवल यह कहें: ' +
+  '"माफ़ कीजिए, मैं तात्या हूँ और इस मशीन व उसके संचालन से संबंधित सवालों में ही सहायता कर सकता हूँ।"';
+
+const OFF_TOPIC_REFUSAL_HINDI =
+  'माफ़ कीजिए, मैं तात्या हूँ और इस मशीन व उसके संचालन से संबंधित सवालों में ही सहायता कर सकता हूँ।';
+
+const MACHINE_BOOT_INTRO_HINDI =
+  'नमस्ते! मेरा नाम तात्या है। मुझे अंकित धूलेकर ने डिज़ाइन किया है। बोलिए, मैं आपकी कैसे मदद करूँ?';
+
+/**
+ * Lightweight server-side policy check for clearly unrelated topics when no
+ * machine/hardware/operation keywords are present.
+ * Note: Prompt + keyword policy provides defense-in-depth for voice assistant
+ * scope, though LLM outputs remain probabilistic.
+ */
+function isClearlyUnrelatedTopic(text) {
+  if (!text || typeof text !== 'string') return false;
+  const lower = text.toLowerCase();
+  const machineKeywords = [
+    'tatya', 'तात्या', 'machine', 'मशीन', 'ankit', 'dhulekar', 'अंकित', 'धूलेकर', 'धुलेकर',
+    'esp32', 'inmp441', 'max98357', 'hx711', 'lcd', 'gpio', 'mic', 'माइक', 'speaker', 'स्पीकर',
+    'button', 'बटन', 'weight', 'वजन', 'वज़न', 'tare', 'टेयर', 'ग्राम', 'gram', 'scale', 'कांटा',
+    'sensor', 'सेंसर', 'wifi', 'वाईफाई', 'आवाज़', 'आवाज', 'voice', 'command', 'कमांड',
+    'कैसे', 'काम', 'मदद', 'सहायता', 'help', 'status', 'error', 'खराब', 'डिज़ाइन', 'बनाया',
+    'कौन', 'नाम', 'परिचय', 'क्या कर', 'फीचर', 'feature', 'troubleshoot', 'हेलो', 'नमस्ते'
+  ];
+  for (const kw of machineKeywords) {
+    if (lower.includes(kw)) return false;
+  }
+  const unrelatedKeywords = [
+    'प्रधानमंत्री', 'राष्ट्रपति', 'चुनाव', 'राजनीति', 'politics', 'election', 'minister',
+    'क्रिकेट', 'विराट', 'रोहित', 'ipl', 'cricket', 'football', 'फिल्म', 'बॉलीवुड', 'गाना',
+    'movie', 'bollywood', 'song', 'चुटकुला', 'joke', 'कहानी', 'story', 'राशिफल', 'horoscope',
+    'शेयर बाजार', 'bitcoin', 'crypto', 'stock market', 'weather in', 'राजधानी'
+  ];
+  for (const bad of unrelatedKeywords) {
+    if (lower.includes(bad)) return true;
+  }
+  return false;
+}
 
 const DEFAULT_MODEL_FALLBACKS = [
   'models/gemini-3.8-live',
@@ -736,9 +787,49 @@ function createServerInstance(overrides = {}) {
       return;
     }
 
-    // 6. Direct text message / question
+    // 5b. One-time Machine Alpha boot introduction request
+    if (msg.type === 'boot_intro') {
+      log('INFO', session.id, 'Triggering one-time Machine Alpha Hindi boot introduction');
+      enqueueOrSendToGemini(session, {
+        clientContent: {
+          turns: [
+            {
+              role: 'user',
+              parts: [
+                {
+                  text: `[System Boot Directive: केवल यह परिचय शब्दशः, स्पष्ट और स्वाभाविक हिंदी में बोलें (कोई अतिरिक्त शब्द न जोड़ें): "${MACHINE_BOOT_INTRO_HINDI}"]`,
+                },
+              ],
+            },
+          ],
+          turnComplete: true,
+        },
+      });
+      return;
+    }
+
+    // 6. Direct text message / question (with server-side topic guardrail)
     if (msg.type === 'text' && typeof msg.text === 'string' && msg.text.trim()) {
       const userText = msg.text.trim();
+      if (isClearlyUnrelatedTopic(userText)) {
+        log('INFO', session.id, `Blocked off-topic text prompt via server policy: "${userText.slice(0, 80)}"`);
+        enqueueOrSendToGemini(session, {
+          clientContent: {
+            turns: [
+              {
+                role: 'user',
+                parts: [
+                  {
+                    text: `[System Policy Override: उपयोगकर्ता ने मशीन से असंबंधित प्रश्न पूछा है। केवल यह वाक्य हिंदी में बोलें: "${OFF_TOPIC_REFUSAL_HINDI}"]`,
+                  },
+                ],
+              },
+            ],
+            turnComplete: true,
+          },
+        });
+        return;
+      }
       log('INFO', session.id, `Forwarding text prompt from ESP32: "${userText.slice(0, 80)}"`);
       enqueueOrSendToGemini(session, {
         clientContent: {
@@ -1005,13 +1096,12 @@ function createServerInstance(overrides = {}) {
 
     // 4d. Interruption handling (user barge-in)
     if (serverContent.interrupted) {
-      log('INFO', session.id, 'Gemini turn interrupted; clearing pending outbound audio chunks');
-      // Remove any queued binary audio chunks so playback stops immediately
-      session.outboundQueue = session.outboundQueue.filter((item) => !item.isBinary);
-      enqueueEspOutbound(session, {
-        isBinary: false,
-        data: JSON.stringify({ type: 'interrupted' }),
-      });
+      log(
+        'INFO',
+        session.id,
+        'Gemini turn interrupted signal received (retaining all outbound audio chunks so speech is not cut off)'
+      );
+      // Do NOT clear pending outbound audio chunks so ESP32 receives the complete spoken response
     }
 
     // 4e. Turn Completion (enqueued after all audio slices so ESP32 receives it after final audio byte)
