@@ -47,7 +47,9 @@ const DEFAULT_SYSTEM_INSTRUCTION =
   '2) कभी भी कोई काल्पनिक हार्डवेयर, सेंसर, फीचर या कमांड न गढ़ें और कभी भी अपना नाम "मशीन अल्फा" न बताएं। ' +
   '3) हर उत्तर से पहले अपना पूरा परिचय दोबारा न दोहराएं। ' +
   '4) मशीन से असंबंधित सामान्य ज्ञान, राजनीति, मनोरंजन, खेल, फिल्में, या व्यक्तिगत सलाह जैसे विषयों पर विनम्रता से मना करें और केवल यह कहें: ' +
-  '"माफ़ कीजिए, मैं तात्या हूँ और इस मशीन व उसके संचालन से संबंधित सवालों में ही सहायता कर सकता हूँ।"';
+  '"माफ़ कीजिए, मैं तात्या हूँ और इस मशीन व उसके संचालन से संबंधित सवालों में ही सहायता कर सकता हूँ।" ' +
+  '5) बोलने की शैली और गति: बहुत शांत, गंभीर, स्पष्ट और स्वाभाविक गति (calm, slow and unhurried speaking pace) में बोलें। जल्दी-जल्दी बिल्कुल न बोलें। शब्दों के बीच स्वाभाविक ठहराव (natural pauses) रखें ताकि हर शब्द साफ़, अलग और क्रिस्टल क्लियर सुनाई दे। ' +
+  '6) भाषा: केवल शुद्ध, स्वाभाविक हिंदी बोलें। कोई अंग्रेजी शब्द या अस्पष्ट उच्चारण न करें।';
 
 const OFF_TOPIC_REFUSAL_HINDI =
   'माफ़ कीजिए, मैं तात्या हूँ और इस मशीन व उसके संचालन से संबंधित सवालों में ही सहायता कर सकता हूँ।';
@@ -371,6 +373,8 @@ function createServerInstance(overrides = {}) {
       audioChunksOut: 0,
       audioBytesOut: 0,
       lastWeightGrams: null,
+      isAiSpeaking: false,
+      micGated: false,
     };
 
     activeSessions.set(sessionId, session);
@@ -644,6 +648,12 @@ function createServerInstance(overrides = {}) {
   function handleEspBinaryAudio(session, pcmBuffer) {
     if (!pcmBuffer || pcmBuffer.length === 0) return;
 
+    // Discard mic audio while AI is actively speaking or after turn has ended
+    // to prevent Gemini server-side VAD barge-in from truncating AI speech
+    if (session.isAiSpeaking || session.micGated) {
+      return;
+    }
+
     // Ensure 16-bit PCM alignment (even number of bytes)
     let alignedBuffer = pcmBuffer;
     if (alignedBuffer.length % 2 !== 0) {
@@ -746,6 +756,7 @@ function createServerInstance(overrides = {}) {
         session.id,
         `ESP32 signaled end_of_turn (chunksIn=${session.audioChunksIn}, bytesIn=${session.audioBytesIn})`
       );
+      session.micGated = true;
       // Official Gemini Live API audio stream flush signal
       enqueueOrSendToGemini(session, {
         realtimeInput: {
@@ -760,6 +771,14 @@ function createServerInstance(overrides = {}) {
           },
         });
       }
+      return;
+    }
+
+    // 4b. Voice start signal from ESP32 (new user utterance begins)
+    if (msg.type === 'voice_start' || msg.type === 'start_turn') {
+      log('INFO', session.id, 'Received voice_start signal from ESP32');
+      session.isAiSpeaking = false;
+      session.micGated = false;
       return;
     }
 
@@ -787,9 +806,11 @@ function createServerInstance(overrides = {}) {
       return;
     }
 
-    // 5b. One-time Machine Alpha boot introduction request
+    // 5b. One-time Tatya Hindi boot introduction request
     if (msg.type === 'boot_intro') {
-      log('INFO', session.id, 'Triggering one-time Machine Alpha Hindi boot introduction');
+      log('INFO', session.id, 'Triggering one-time Tatya Hindi boot introduction');
+      session.isAiSpeaking = true;
+      session.micGated = true;
       enqueueOrSendToGemini(session, {
         clientContent: {
           turns: [
@@ -797,7 +818,7 @@ function createServerInstance(overrides = {}) {
               role: 'user',
               parts: [
                 {
-                  text: `[System Boot Directive: केवल यह परिचय शब्दशः, स्पष्ट और स्वाभाविक हिंदी में बोलें (कोई अतिरिक्त शब्द न जोड़ें): "${MACHINE_BOOT_INTRO_HINDI}"]`,
+                  text: 'नमस्ते तात्या! कृपया बहुत शांत, गंभीर, मधुर और स्वाभाविक हिंदी में अपना परिचय दें और बताएं कि आप कौन हैं और क्या मदद कर सकते हैं।',
                 },
               ],
             },
@@ -1057,6 +1078,8 @@ function createServerInstance(overrides = {}) {
 
     // 4c. Model Turn Parts (Inline PCM Audio + Text)
     if (serverContent.modelTurn && Array.isArray(serverContent.modelTurn.parts)) {
+      session.isAiSpeaking = true;
+      session.micGated = true;
       for (const part of serverContent.modelTurn.parts) {
         if (part.text && typeof part.text === 'string') {
           enqueueEspOutbound(session, {
@@ -1106,6 +1129,8 @@ function createServerInstance(overrides = {}) {
 
     // 4e. Turn Completion (enqueued after all audio slices so ESP32 receives it after final audio byte)
     if (serverContent.turnComplete) {
+      session.isAiSpeaking = false;
+      session.micGated = false;
       log(
         'INFO',
         session.id,
